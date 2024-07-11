@@ -2687,6 +2687,30 @@ static int tcc_write_elf_file(TCCState *s1, const char *filename, int phnum,
     return ret;
 }
 
+static int tcc_build_elf_image(TCCState *s1, char **outbuf, size_t *outsize, int phnum,
+                              ElfW(Phdr) *phdr, int file_offset, int *sec_order)
+{
+    int ret;
+    FILE *f;
+
+    if ((f = open_memstream(outbuf, outsize)) == NULL)
+        return tcc_error_noabort("could not open memstream: '%s'", strerror(errno));
+    if (s1->verbose)
+        printf("<- memstream\n");
+#ifdef TCC_TARGET_COFF
+    if (s1->output_format == TCC_OUTPUT_FORMAT_COFF)
+        tcc_output_coff(s1, f);
+    else
+#endif
+    if (s1->output_format == TCC_OUTPUT_FORMAT_ELF)
+        ret = tcc_output_elf(s1, f, phnum, phdr, file_offset, sec_order);
+    else
+        ret = tcc_output_binary(s1, f, sec_order);
+    fclose(f);
+
+    return ret;
+}
+
 #ifndef ELF_OBJ_ONLY
 /* Sort section headers by assigned sh_addr, remove sections
    that we aren't going to output.  */
@@ -2995,6 +3019,77 @@ static int elf_output_obj(TCCState *s1, const char *filename)
     }
     /* Create the ELF file with name 'filename' */
     ret = tcc_write_elf_file(s1, filename, 0, NULL, file_offset, NULL);
+    return ret;
+}
+
+// https://sourceware.org/gdb/current/onlinedocs/gdb.html/JIT-Interface.html#JIT-Interface
+
+typedef enum {
+    JIT_NOACTION = 0,
+    JIT_REGISTER,
+    JIT_UNREGISTER,
+} jit_actions_t;
+
+struct jit_code_entry {
+    struct jit_code_entry *next_entry;
+    struct jit_code_entry *prev_entry;
+    const char *symfile_addr;
+    uint64_t symfile_size;
+};
+
+struct jit_descriptor {
+    uint32_t version;
+    uint32_t action_flag;
+    struct jit_code_entry *relevant_entry;
+    struct jit_code_entry *first_entry;
+};
+
+void __attribute__((noinline)) __jit_debug_register_code() {
+    asm volatile("" ::: "memory");
+};
+
+struct jit_descriptor __jit_debug_descriptor = { 1, 0, 0, 0 };
+
+int tccelf_output_gdb_syms(TCCState *s1)
+{
+    Section *s;
+    int i, ret, file_offset;
+    char *elf_image = NULL;
+    size_t elf_image_size = 0;
+    struct jit_code_entry *entry;
+    s1->nb_errors = 0;
+    /* Allocate strings for section names */
+    alloc_sec_names(s1, 1);
+    file_offset = sizeof (ElfW(Ehdr));
+    for (i = 1; i < s1->nb_sections; i++) {
+        s = s1->sections[i];
+        file_offset = (file_offset + 15) & -16;
+        s->sh_offset = file_offset;
+        if (s->sh_type != SHT_NOBITS)
+            file_offset += s->sh_size;
+    }
+    /* Create the ELF image into a buffer */
+    ret = tcc_build_elf_image(s1, &elf_image, &elf_image_size, 0, NULL, file_offset, NULL);
+    if (ret < 0 || !elf_image || !elf_image_size) {
+        tcc_error_noabort("Failed to create in-memory elf image");
+        return ret;
+    }
+
+    entry = calloc(1, sizeof(*entry));
+    entry->symfile_addr = elf_image;
+    entry->symfile_size = elf_image_size;
+    entry->prev_entry = __jit_debug_descriptor.relevant_entry;
+    __jit_debug_descriptor.relevant_entry = entry;
+    if (entry->prev_entry) {
+        entry->prev_entry->next_entry = entry;
+    } else {
+        __jit_debug_descriptor.first_entry = entry;
+    }
+
+    __jit_debug_descriptor.action_flag = JIT_REGISTER;
+    __jit_debug_register_code();
+    tcc_free(elf_image);
+
     return ret;
 }
 

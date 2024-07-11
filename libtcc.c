@@ -773,6 +773,8 @@ static int tcc_compile(TCCState *s1, int filetype, const char *str, int fd)
     tccgen_finish(s1);
     preprocess_end(s1);
     s1->error_set_jmp_enabled = 0;
+    if (s1->output_type == TCC_OUTPUT_MEMORY)
+        tccelf_output_gdb_syms(s1);
     tcc_exit_state(s1);
     return s1->nb_errors != 0 ? -1 : 0;
 }
