@@ -1459,6 +1459,7 @@ static int tcc_get_dwarf_info(TCCState *s1, Sym *s)
 				  : DWARF_ABBREV_UNION_EMPTY_TYPE
 		        : t->next ? DWARF_ABBREV_STRUCTURE_TYPE
 				  : DWARF_ABBREV_STRUCTURE_EMPTY_TYPE);
+        // FIXME: Pretty sure there is a bug here
 	    dwarf_strp(dwarf_info_section,
                        (t->v & ~SYM_STRUCT) >= SYM_FIRST_ANOM
                        ? "" : get_tok_str(t->v, NULL));
